@@ -2,25 +2,47 @@
 
 ###############################################################################
 # 16S rRNA V3-V4 sequencing analysis
-# QIIME2 + DADA2
+# QIIME 2 + DADA2 + Greengenes2
 #
-# 说明：
-# 1. 本脚本仅保留论文复现所需的核心步骤。
-# 2. 所有样本编号和路径均已匿名化/示例化。
-# 3. 不应公开真实受试者信息、真实样本编号或服务器绝对路径。
+# Software / database:
+#   QIIME 2 v2024.2
+#   DADA2
+#   Greengenes2 database v2022.10
+#
+# Notes:
+# 1. This script retains the core workflow required for reproducibility.
+# 2. All sample identifiers and paths are anonymized/example values.
+# 3. No participant identifiers or private server paths are included.
 ###############################################################################
 
-# 1. 激活 QIIME2 环境
+set -e
+
+
+###############################################################################
+# 1. Activate QIIME 2 environment
+###############################################################################
+
 conda activate qiime2-amplicon-2024.2
 
-# 2. 导入双端测序数据
+
+###############################################################################
+# 2. Import paired-end sequencing data
+###############################################################################
+
 qiime tools import \
   --type 'SampleData[PairedEndSequencesWithQuality]' \
   --input-path manifest.tsv \
   --output-path demux.qza \
   --input-format PairedEndFastqManifestPhred33V2
 
-# 3. 去除 V3-V4 引物
+
+###############################################################################
+# 3. Remove V3-V4 primers
+#
+# 341F: CCTACGGGNGGCWGCAG
+# 805R: GACTACHVGGGTATCTAATCC
+###############################################################################
+
 qiime cutadapt trim-paired \
   --i-demultiplexed-sequences demux.qza \
   --p-front-f CCTACGGGNGGCWGCAG \
@@ -31,12 +53,23 @@ qiime cutadapt trim-paired \
   --p-cores 30 \
   --o-trimmed-sequences trimmed-seqs.qza
 
-# 4. 查看测序质量
+
+###############################################################################
+# 4. Inspect sequencing quality
+###############################################################################
+
 qiime demux summarize \
   --i-data trimmed-seqs.qza \
   --o-visualization trimmed-seqs.qzv
 
-# 5. DADA2 去噪并生成 ASV
+
+###############################################################################
+# 5. DADA2 denoising and ASV generation
+#
+# Truncation parameters should correspond to the sequencing quality profile
+# used in the original analysis.
+###############################################################################
+
 qiime dada2 denoise-paired \
   --i-demultiplexed-seqs trimmed-seqs.qza \
   --p-trim-left-f 0 \
@@ -48,27 +81,78 @@ qiime dada2 denoise-paired \
   --o-representative-sequences rep-seqs.qza \
   --o-denoising-stats denoising-stats.qza
 
-# 6. 去除仅出现在单一样本中的低频 ASV
+
+###############################################################################
+# 6. Remove low-frequency ASVs occurring in only one sample
+###############################################################################
+
 qiime feature-table filter-features \
   --i-table table.qza \
   --p-min-samples 2 \
   --o-filtered-table filtered-table.qza
+
 
 qiime feature-table filter-seqs \
   --i-data rep-seqs.qza \
   --i-table filtered-table.qza \
   --o-filtered-data filtered-rep-seqs.qza
 
-# 7. 查看 DADA2 质控结果
+
+###############################################################################
+# 7. Inspect DADA2 denoising statistics
+###############################################################################
+
 qiime metadata tabulate \
   --m-input-file denoising-stats.qza \
   --o-visualization denoising-stats.qzv
 
-# 8. 导出 ASV 丰度表
+
+###############################################################################
+# 8. Greengenes2 v2022.10 taxonomic annotation
+#
+# Required Greengenes2 reference files:
+#
+# refs/2022.10.backbone.full-length.fna.qza
+# refs/2022.10.taxonomy.asv.nwk.qza
+#
+# V3-V4 is treated using the Greengenes2 non-v4-16s workflow.
+###############################################################################
+
+qiime greengenes2 non-v4-16s \
+  --i-table filtered-table.qza \
+  --i-sequences filtered-rep-seqs.qza \
+  --i-backbone refs/2022.10.backbone.full-length.fna.qza \
+  --o-mapped-table gg2-table.qza \
+  --o-representatives gg2-rep-seqs.qza
+
+
+###############################################################################
+# 9. Assign Greengenes2 taxonomy
+###############################################################################
+
+qiime greengenes2 taxonomy-from-table \
+  --i-reference-taxonomy refs/2022.10.taxonomy.asv.nwk.qza \
+  --i-table gg2-table.qza \
+  --o-classification taxonomy.qza
+
+
+###############################################################################
+# 10. Visualize taxonomy
+###############################################################################
+
+qiime metadata tabulate \
+  --m-input-file taxonomy.qza \
+  --o-visualization taxonomy.qzv
+
+
+###############################################################################
+# 11. Export Greengenes2-mapped feature table
+###############################################################################
+
 mkdir -p exported-table
 
 qiime tools export \
-  --input-path filtered-table.qza \
+  --input-path gg2-table.qza \
   --output-path exported-table
 
 biom convert \
@@ -76,30 +160,57 @@ biom convert \
   -o exported-table/feature-table.tsv \
   --to-tsv
 
-# 9. 提取 SILVA V3-V4 参考序列
-qiime feature-classifier extract-reads \
-  --i-sequences silva-138-99-seqs.qza \
-  --p-f-primer CCTACGGGNGGCWGCAG \
-  --p-r-primer GACTACHVGGGTATCTAATCC \
-  --p-min-length 200 \
-  --p-max-length 600 \
-  --o-reads silva-v3v4-seqs.qza
 
-# 10. 训练 Naive Bayes 分类器
-qiime feature-classifier fit-classifier-naive-bayes \
-  --i-reference-reads silva-v3v4-seqs.qza \
-  --i-reference-taxonomy silva-138-99-tax.qza \
-  --o-classifier silva-v3v4-classifier.qza
+###############################################################################
+# 12. Export taxonomy
+###############################################################################
 
-# 11. 物种注释
-qiime feature-classifier classify-sklearn \
-  --i-classifier silva-v3v4-classifier.qza \
-  --i-reads filtered-rep-seqs.qza \
-  --o-classification taxonomy.qza
-
-# 12. 导出物种注释结果
 mkdir -p exported-taxonomy
 
 qiime tools export \
   --input-path taxonomy.qza \
   --output-path exported-taxonomy
+
+
+###############################################################################
+# 13. Optional: collapse taxonomy to genus level
+#
+# Greengenes2 taxonomy levels:
+# level 1 = domain
+# level 2 = phylum
+# level 3 = class
+# level 4 = order
+# level 5 = family
+# level 6 = genus
+# level 7 = species
+###############################################################################
+
+qiime taxa collapse \
+  --i-table gg2-table.qza \
+  --i-taxonomy taxonomy.qza \
+  --p-level 6 \
+  --o-collapsed-table genus-table.qza
+
+
+###############################################################################
+# 14. Export genus-level abundance table
+###############################################################################
+
+mkdir -p exported-genus
+
+qiime tools export \
+  --input-path genus-table.qza \
+  --output-path exported-genus
+
+biom convert \
+  -i exported-genus/feature-table.biom \
+  -o exported-genus/genus-table.tsv \
+  --to-tsv
+
+
+###############################################################################
+# End
+###############################################################################
+
+echo "16S rRNA analysis completed."
+echo "Taxonomic reference: Greengenes2 v2022.10"
