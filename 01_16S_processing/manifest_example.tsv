@@ -1,0 +1,4 @@
+sample-idforward-absolute-filepathreverse-absolute-filepath
+S001/path/to/data/S001_R1.fastq.gz/path/to/data/S001_R2.fastq.gz
+S002/path/to/data/S002_R1.fastq.gz/path/to/data/S002_R2.fastq.gz
+S003/path/to/data/S003_R1.fastq.gz/path/to/data/S003_R2.fastq.gz
